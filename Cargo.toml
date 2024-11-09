@@ -1,0 +1,10 @@
+[package]
+name = "rust-server-exercise"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7.7"
+tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
+tokio-stream = { version = "0.1.16", features = ["fs"] }
+tower-http = { version = "0.6.1", features = ["fs"] }
