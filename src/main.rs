@@ -3,13 +3,11 @@
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    extract::{Request, State},
+    extract::State,
     handler::HandlerWithoutStateExt,
-    http::HeaderMap,
-    middleware::{self, Next},
-    response::Response,
-    routing::any,
-    Extension, Router,
+    middleware::{self},
+    routing::{get, post},
+    Router,
 };
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
@@ -63,12 +61,15 @@ async fn main() {
                 )),
         );
 
+    let api_router = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/metrics", get(fileserver_hits))
+        .route("/reset", post(reset_fileserver_hits));
+
     let main_router = Router::new()
         .merge(app_router)
         // .nest("/app/", app_router)
-        .route("/healthz", any(healthz))
-        .route("/metrics", any(fileserver_hits))
-        .route("/reset", any(reset_fileserver_hits))
+        .nest("/api", api_router)
         .fallback(static_fallback)
         .with_state(app_state);
 
