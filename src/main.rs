@@ -1,42 +1,74 @@
 #![feature(let_chains)]
 
-use std::{
-    convert::Infallible,
-    task::{Context, Poll},
-};
-
-use tokio::fs;
+use std::sync::{Arc, Mutex};
 
 use axum::{
-    extract::Path,
-    handler::{Handler, HandlerWithoutStateExt},
-    http::{
-        header::{self, HeaderMap, HeaderName},
-        StatusCode, Uri,
-    },
-    response::{Html, IntoResponse},
-    routing::{any, get},
-    Json, Router,
+    extract::{Request, State},
+    handler::HandlerWithoutStateExt,
+    http::HeaderMap,
+    middleware::{self, Next},
+    response::Response,
+    routing::any,
+    Extension, Router,
 };
-use tokio_stream::{wrappers::ReadDirStream, StreamExt};
+use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
+
+mod list_dir;
+use self::list_dir::{servedir_fallback, static_fallback};
+
+#[derive(Clone)]
+struct AppState {
+    data: Arc<Mutex<AppStateData>>,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(AppStateData::new())),
+        }
+    }
+}
+
+struct AppStateData {
+    fileserver_hits: u64,
+}
+
+impl AppStateData {
+    fn new() -> Self {
+        Self { fileserver_hits: 0 }
+    }
+}
 
 #[tokio::main]
 async fn main() {
+    let app_state = AppState::new();
+
     // let file_server = ServeDir::new("static").append_index_html_on_directories(false);
     let file_server = ServeDir::new("").fallback(servedir_fallback.into_service());
 
     // build our application with a separate router
     let app_router = Router::new()
         .route_service("/app/*path", file_server.clone())
+        .route_service("/app", file_server.clone())
         .route_service("/app/", file_server.clone())
-        .route_service("/app", file_server);
+        .layer(
+            ServiceBuilder::new()
+                .layer(middleware::from_fn(initialize_request_state))
+                .layer(middleware::from_fn_with_state(
+                    app_state.clone(),
+                    fileserver_hits_middleware,
+                )),
+        );
 
     let main_router = Router::new()
         .merge(app_router)
         // .nest("/app/", app_router)
         .route("/healthz", any(healthz))
-        .fallback(static_fallback);
+        .route("/metrics", any(fileserver_hits))
+        .route("/reset", any(reset_fileserver_hits))
+        .fallback(static_fallback)
+        .with_state(app_state);
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
@@ -44,43 +76,71 @@ async fn main() {
     axum::serve(listener, main_router).await.unwrap();
 }
 
-// `String` implements `IntoResponse`; the response will have statuscode 200 and `text/plain; charset=utf-8` content-type.
-async fn healthz() -> String {
-    "OK".to_string()
+#[derive(Clone)]
+struct RequestState {
+    has_been_counted: bool,
 }
 
-async fn static_fallback(uri: Uri) -> impl IntoResponse {
-    println!("{uri:?}");
-    (StatusCode::OK, "No such file".to_string())
-}
-
-async fn servedir_fallback(Path(path): Path<String>, uri: Uri) -> impl IntoResponse {
-    println!("path: {path}, uri: {uri:?}");
-    let path = format!("app/{path}");
-    println!("path: {path}, uri: {uri:?}");
-    let metadata = fs::metadata(&path).await;
-    println!("{metadata:?}");
-    let Ok(metadata) = metadata else {
-        return static_fallback(uri).await.into_response();
-    };
-
-    if metadata.is_dir()
-        && let Ok(listing) = list_dir(&path).await
-    {
-        (StatusCode::OK, Html::from(listing)).into_response()
-    } else {
-        static_fallback(uri).await.into_response()
+impl RequestState {
+    fn new() -> Self {
+        Self {
+            has_been_counted: false,
+        }
     }
 }
 
-async fn list_dir(path: &str) -> std::io::Result<String> {
-    let dir_entries = ReadDirStream::new(fs::read_dir(path).await?);
-    let file_links: Vec<String> = dir_entries
-        .filter_map(|rf| rf.ok().map(|f| f.file_name()))
-        .filter_map(|f| f.into_string().ok())
-        .map(|f| format!("<a href=\"{f}\">{f}</a>",))
-        .collect()
-        .await;
-    let file_links = file_links.join("\n");
-    Ok(format!("<pre>\n{file_links}\n</pre>"))
+async fn initialize_request_state(mut request: Request, next: Next) -> Response {
+    request.extensions_mut().insert(RequestState::new());
+
+    println!("Initialize request state");
+    println!("{request:?}");
+    let resp = next.run(request).await;
+    println!("{resp:?}");
+    resp
+}
+
+async fn fileserver_hits_middleware(
+    State(app_state): State<AppState>,
+    Extension(mut request_state): Extension<RequestState>,
+    // you can add more extractors here but the last
+    // extractor must implement `FromRequest` which
+    // `Request` does
+    request: Request,
+    next: Next,
+) -> Response {
+    if !request_state.has_been_counted && !request_is_self_redirect(&request) {
+        let mut data_mux = app_state.data.lock().unwrap();
+        data_mux.fileserver_hits += 1;
+        request_state.has_been_counted = true;
+    }
+    println!("Fileserver hits middleware");
+    println!("{request:?}");
+
+    let resp = next.run(request).await;
+    println!("{resp:?}");
+    resp
+}
+
+fn request_is_self_redirect(request: &Request) -> bool {
+    if let Some(referer) = request.headers().get("referer") {
+        if let Ok(referer_str) = referer.to_str() {
+            // TODO: This is a very specific hack, need another method in general--probably wrapping ServeDir more directly to avoid the redirects in the first place.
+            // We can potentially also inspect responses and handle 307 redirects in the fileserver hits middleware
+            return referer_str.contains("localhost");
+        }
+    }
+    false
+}
+
+async fn fileserver_hits(State(state): State<AppState>) -> String {
+    let hits = { state.data.lock().unwrap().fileserver_hits };
+    format!("Hits: {hits}")
+}
+async fn reset_fileserver_hits(State(state): State<AppState>) {
+    state.data.lock().unwrap().fileserver_hits = 0;
+}
+
+// `String` implements `IntoResponse`; the response will have statuscode 200 and `text/plain; charset=utf-8` content-type.
+async fn healthz() -> String {
+    "OK".to_string()
 }
