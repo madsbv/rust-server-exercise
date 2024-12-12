@@ -16,7 +16,7 @@ use tower_http::services::ServeDir;
 mod list_dir;
 use self::list_dir::{servedir_fallback, static_fallback};
 mod middlewarez;
-use self::middlewarez::{fileserver_hits_middleware, initialize_request_state};
+use self::middlewarez::fileserver_hits_middleware;
 
 #[derive(Clone)]
 struct AppState {
@@ -53,14 +53,10 @@ async fn main() {
         .route_service("/app/*path", file_server.clone())
         .route_service("/app", file_server.clone())
         .route_service("/app/", file_server.clone())
-        .layer(
-            ServiceBuilder::new()
-                .layer(middleware::from_fn(initialize_request_state))
-                .layer(middleware::from_fn_with_state(
-                    app_state.clone(),
-                    fileserver_hits_middleware,
-                )),
-        );
+        .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            fileserver_hits_middleware,
+        )));
 
     let admin_router = Router::new()
         .route("/metrics", get(fileserver_hits))
@@ -70,13 +66,12 @@ async fn main() {
 
     let main_router = Router::new()
         .merge(app_router)
-        // .nest("/app/", app_router)
         .nest("/api", api_router)
         .nest("/admin", admin_router)
         .fallback(static_fallback)
         .with_state(app_state);
 
-    // run our app with hyper, listening globally on port 3000
+    // run our app with hyper, listening globally on port 8080
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
 
     axum::serve(listener, main_router).await.unwrap();
