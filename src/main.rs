@@ -6,6 +6,7 @@ use axum::{
     extract::State,
     handler::HandlerWithoutStateExt,
     middleware::{self},
+    response::Html,
     routing::{get, post},
     Router,
 };
@@ -61,15 +62,17 @@ async fn main() {
                 )),
         );
 
-    let api_router = Router::new()
-        .route("/healthz", get(healthz))
+    let admin_router = Router::new()
         .route("/metrics", get(fileserver_hits))
         .route("/reset", post(reset_fileserver_hits));
+
+    let api_router = Router::new().route("/healthz", get(healthz));
 
     let main_router = Router::new()
         .merge(app_router)
         // .nest("/app/", app_router)
         .nest("/api", api_router)
+        .nest("/admin", admin_router)
         .fallback(static_fallback)
         .with_state(app_state);
 
@@ -79,9 +82,17 @@ async fn main() {
     axum::serve(listener, main_router).await.unwrap();
 }
 
-async fn fileserver_hits(State(state): State<AppState>) -> String {
+async fn fileserver_hits(State(state): State<AppState>) -> Html<String> {
     let hits = { state.data.lock().unwrap().fileserver_hits };
-    format!("Hits: {hits}")
+    format!(
+        "<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited {hits} times!</p>
+  </body>
+</html>"
+    )
+    .into()
 }
 async fn reset_fileserver_hits(State(state): State<AppState>) {
     state.data.lock().unwrap().fileserver_hits = 0;
