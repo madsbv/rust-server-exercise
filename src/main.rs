@@ -13,10 +13,14 @@ use axum::{
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 
+mod api;
 mod list_dir;
-use self::list_dir::{servedir_fallback, static_fallback};
 mod middlewarez;
-use self::middlewarez::fileserver_hits_middleware;
+use self::{
+    api::validate_chirp,
+    list_dir::{servedir_fallback, static_fallback},
+    middlewarez::fileserver_hits_middleware,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -62,7 +66,9 @@ async fn main() {
         .route("/metrics", get(fileserver_hits))
         .route("/reset", post(reset_fileserver_hits));
 
-    let api_router = Router::new().route("/healthz", get(healthz));
+    let api_router = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/validate_chirp", post(validate_chirp));
 
     let main_router = Router::new()
         .merge(app_router)
