@@ -12,8 +12,8 @@ pub struct ValidateChirpPayload {
 }
 
 #[derive(Serialize)]
-pub struct ValidateChirpValid {
-    valid: bool,
+pub struct CleanedValidChirp {
+    cleaned_body: String,
 }
 
 #[derive(Serialize)]
@@ -33,6 +33,26 @@ pub async fn validate_chirp(
         )
             .into_response()
     } else {
-        (StatusCode::OK, Json(ValidateChirpValid { valid: true })).into_response()
+        (
+            StatusCode::OK,
+            Json(CleanedValidChirp {
+                cleaned_body: clean_chirp(&chirp.body),
+            }),
+        )
+            .into_response()
     }
+}
+
+fn clean_chirp(chirp: &str) -> String {
+    chirp
+        .split_whitespace()
+        .map(|w| if is_word_bad(w) { "****" } else { w })
+        .collect::<Vec<&str>>()
+        .join(" ")
+}
+
+fn is_word_bad(w: &str) -> bool {
+    let bad_words = ["kerfuffle", "sharbert", "fornax"];
+
+    bad_words.contains(&w.to_lowercase().as_str())
 }
