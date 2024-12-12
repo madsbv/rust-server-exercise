@@ -2,21 +2,21 @@ use tokio::fs;
 
 use axum::{
     extract::Path,
-    http::{StatusCode, Uri},
+    http::StatusCode,
     response::{Html, IntoResponse},
 };
 
 use tokio_stream::{wrappers::ReadDirStream, StreamExt};
 
-pub async fn static_fallback(uri: Uri) -> impl IntoResponse {
+pub async fn static_fallback() -> impl IntoResponse {
     (StatusCode::OK, "No such file".to_string())
 }
 
-pub async fn servedir_fallback(Path(path): Path<String>, uri: Uri) -> impl IntoResponse {
+pub async fn servedir_fallback(Path(path): Path<String>) -> impl IntoResponse {
     let path = format!("app/{path}");
     let metadata = fs::metadata(&path).await;
     let Ok(metadata) = metadata else {
-        return static_fallback(uri).await.into_response();
+        return static_fallback().await.into_response();
     };
 
     if metadata.is_dir()
@@ -24,7 +24,7 @@ pub async fn servedir_fallback(Path(path): Path<String>, uri: Uri) -> impl IntoR
     {
         (StatusCode::OK, Html::from(listing)).into_response()
     } else {
-        static_fallback(uri).await.into_response()
+        static_fallback().await.into_response()
     }
 }
 
