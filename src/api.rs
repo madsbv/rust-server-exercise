@@ -1,5 +1,8 @@
-use axum::{extract, http::StatusCode, response::IntoResponse, Json};
+use axum::{extract, http::StatusCode, response::IntoResponse, Extension, Json};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+
+use crate::queries::create_user_query;
 
 #[derive(Deserialize)]
 pub struct ValidateChirpPayload {
@@ -50,4 +53,24 @@ fn is_word_bad(w: &str) -> bool {
     let bad_words = ["kerfuffle", "sharbert", "fornax"];
 
     bad_words.contains(&w.to_lowercase().as_str())
+}
+
+#[derive(Deserialize)]
+pub struct CreateUserPayload {
+    email: String,
+}
+
+pub async fn create_user(
+    Extension(db): Extension<PgPool>,
+    Json(payload): Json<CreateUserPayload>,
+) -> impl IntoResponse {
+    let res = create_user_query(db, &payload.email).await;
+    match res {
+        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
+        Err(err) => {
+            println!("email: {}", payload.email);
+            println!("{err:?}");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
 }

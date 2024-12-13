@@ -35,15 +35,26 @@
           echo "Stopping postgres server"
           pg_ctl stop
         '';
+        env = ''
+          #!/usr/bin/env zsh
+
+          DATABASE_URL=postgres://postgres:dev@localhost:5432
+
+        '';
       in
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             postgresql_16_jit
+            sqlx-cli
           ];
 
           shellHook = ''
             export FLAKE_ROOT="$(git rev-parse --show-toplevel)"
+
+            echo "${env}" > $FLAKE_ROOT/.env
+            set -a; source .env; set +a
+
             mkdir -p $FLAKE_ROOT/postgres
             echo "$FLAKE_ROOT"
             export PGDATA="$FLAKE_ROOT/postgres/.pg"
