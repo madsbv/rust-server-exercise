@@ -1,5 +1,6 @@
 #![feature(let_chains)]
 
+use api::post_chirp;
 use axum::{
     handler::HandlerWithoutStateExt,
     middleware::{self},
@@ -19,7 +20,7 @@ mod state;
 
 use self::{
     admin::{metrics, reset},
-    api::{create_user, validate_chirp},
+    api::create_user,
     list_dir::{servedir_fallback, static_fallback},
     middlewarez::fileserver_hits_middleware,
     state::{AppState, Platform},
@@ -61,7 +62,7 @@ async fn main() {
 
     let api_router = Router::new()
         .route("/healthz", get(healthz))
-        .route("/validate_chirp", post(validate_chirp))
+        .route("/chirps", post(post_chirp))
         .route("/users", post(create_user));
 
     let main_router = Router::new()
