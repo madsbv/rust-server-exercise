@@ -38,7 +38,7 @@
         env = ''
           #!/usr/bin/env zsh
 
-          DATABASE_URL=postgres://postgres:dev@localhost:5432
+          DATABASE_URL=postgres://dev@localhost:5432/postgres
 
         '';
       in
