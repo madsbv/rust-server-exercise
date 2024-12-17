@@ -60,6 +60,17 @@ pub async fn insert_chirp(
     .await
 }
 
+pub async fn get_all_chirps_ascending_by_creation(db: PgPool) -> Result<Vec<Chirp>, sqlx::Error> {
+    sqlx::query_as!(
+        Chirp,
+        r#"
+SELECT chirp_id, user_id, created_at, updated_at, body as "body: _" FROM chirps ORDER BY created_at ASC
+"#
+    )
+    .fetch_all(&db)
+    .await
+}
+
 /// Take `platform` as input to safeguard against accidental deletion.
 /// WARNING: The caller should never call this function with anything other than Platform::Dev, but because of how dangerous this endpoint is, we add an additional safeguard here.
 /// Returns the number of deleted rows as result if successful.

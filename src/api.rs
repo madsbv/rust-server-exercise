@@ -1,11 +1,12 @@
 use std::ops::Deref;
 
 use axum::{http::StatusCode, response::IntoResponse, Extension, Json};
+use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode, PgPool};
 use time::PrimitiveDateTime;
 use uuid::Uuid;
 
-use crate::queries::{create_user_query, post_chirp_query};
+use crate::queries::{get_all_chirps_ascending_by_creation, insert_chirp, insert_user};
 
 pub async fn post_chirp(
     Extension(db): Extension<PgPool>,
@@ -21,8 +22,15 @@ pub async fn post_chirp(
             .into_response();
     };
 
-    match post_chirp_query(db, body, chirp_payload.user_id).await {
+    match insert_chirp(db, body, chirp_payload.user_id).await {
         Ok(chirp) => (StatusCode::CREATED, Json(chirp)).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+pub async fn get_all_chirps(Extension(db): Extension<PgPool>) -> impl IntoResponse {
+    match get_all_chirps_ascending_by_creation(db).await {
+        Ok(chirps) => Json(chirps).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
@@ -125,7 +133,7 @@ pub async fn create_user(
     Extension(db): Extension<PgPool>,
     Json(payload): Json<CreateUserPayload>,
 ) -> impl IntoResponse {
-    let res = create_user_query(db, &payload.email).await;
+    let res = insert_user(db, &payload.email).await;
     match res {
         Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),

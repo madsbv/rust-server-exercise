@@ -1,6 +1,6 @@
 #![feature(let_chains)]
 
-use api::post_chirp;
+use api::{get_all_chirps, post_chirp};
 use axum::{
     handler::HandlerWithoutStateExt,
     middleware::{self},
@@ -63,6 +63,7 @@ async fn main() {
     let api_router = Router::new()
         .route("/healthz", get(healthz))
         .route("/chirps", post(post_chirp))
+        .route("/chirps", get(get_all_chirps))
         .route("/users", post(create_user));
 
     let main_router = Router::new()
