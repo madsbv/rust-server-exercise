@@ -1,12 +1,12 @@
 use std::ops::Deref;
 
-use axum::{http::StatusCode, response::IntoResponse, Extension, Json};
+use axum::{extract::Path, http::StatusCode, response::IntoResponse, Extension, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode, PgPool};
 use time::PrimitiveDateTime;
 use uuid::Uuid;
 
-use crate::queries::{get_all_chirps_ascending_by_creation, insert_chirp, insert_user};
+use crate::queries::{self, get_all_chirps_ascending_by_creation, insert_chirp, insert_user};
 
 pub async fn post_chirp(
     Extension(db): Extension<PgPool>,
@@ -32,6 +32,16 @@ pub async fn get_all_chirps(Extension(db): Extension<PgPool>) -> impl IntoRespon
     match get_all_chirps_ascending_by_creation(db).await {
         Ok(chirps) => Json(chirps).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+pub async fn get_chirp(
+    Extension(db): Extension<PgPool>,
+    Path(chirp_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match queries::get_chirp(db, chirp_id).await {
+        Ok(chirp) => Json(chirp).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
