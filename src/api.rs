@@ -6,7 +6,9 @@ use sqlx::{Database, Decode, PgPool};
 use time::PrimitiveDateTime;
 use uuid::Uuid;
 
-use crate::queries::{self, get_all_chirps_ascending_by_creation, insert_chirp, insert_user};
+use crate::queries::{
+    self, get_all_chirps_ascending_by_creation, get_user_by_email, insert_chirp, insert_user,
+};
 
 pub async fn post_chirp(
     Extension(db): Extension<PgPool>,
@@ -135,17 +137,32 @@ fn is_word_bad(w: &str) -> bool {
 }
 
 #[derive(Deserialize)]
-pub struct CreateUserPayload {
+pub struct UserAuthPayload {
     email: String,
+    password: String,
 }
 
 pub async fn create_user(
     Extension(db): Extension<PgPool>,
-    Json(payload): Json<CreateUserPayload>,
+    Json(payload): Json<UserAuthPayload>,
 ) -> impl IntoResponse {
-    let res = insert_user(db, &payload.email).await;
+    let res = insert_user(db, &payload.email, &payload.password).await;
     match res {
         Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),
     }
+}
+
+pub async fn login(
+    Extension(db): Extension<PgPool>,
+    Json(payload): Json<UserAuthPayload>,
+) -> impl IntoResponse {
+    let user = get_user_by_email(db, &payload.email).await;
+    if let Ok(user) = user
+        && user.verify(&payload.password).is_ok()
+    {
+        return (StatusCode::OK, Json(user)).into_response();
+    }
+
+    (StatusCode::UNAUTHORIZED, "Incorrect email or password").into_response()
 }

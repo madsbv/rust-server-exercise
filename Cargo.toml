@@ -15,3 +15,4 @@ dotenvy = "0.15.7"
 uuid = { version = "1.11.0", features = ["v4", "serde"] }
 time = { version = "0.3.37", features = ["macros", "parsing", "serde", "serde-human-readable", "serde-well-known"] }
 time-macros = { version = "0.2.0-alpha.1" }
+password-auth = "1.0.0"

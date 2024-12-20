@@ -1,3 +1,4 @@
+use password_auth::{generate_hash, verify_password};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::PrimitiveDateTime;
@@ -14,21 +15,44 @@ pub struct User {
     pub created_at: Option<PrimitiveDateTime>,
     pub updated_at: Option<PrimitiveDateTime>,
     pub email: String,
+    #[serde(skip_serializing)]
+    hashed_password: String,
 }
 
-pub async fn insert_user(db: PgPool, email: &str) -> Result<User, sqlx::Error> {
+impl User {
+    pub fn verify(&self, password: &str) -> Result<(), password_auth::VerifyError> {
+        verify_password(password, &self.hashed_password)
+    }
+}
+
+pub async fn insert_user(db: PgPool, email: &str, password: &str) -> Result<User, sqlx::Error> {
+    let hashed_password = generate_hash(password);
     sqlx::query_as!(
         User,
         r#"
-        INSERT INTO users(id, created_at, updated_at, email)
+        INSERT INTO users(id, created_at, updated_at, email, hashed_password)
         VALUES (
         gen_random_uuid(),
         NOW(),
         NOW(),
-        $1
+        $1,
+        $2
         )
         RETURNING *
         "#,
+        email,
+        hashed_password
+    )
+    .fetch_one(&db)
+    .await
+}
+
+pub async fn get_user_by_email(db: PgPool, email: &str) -> Result<User, sqlx::Error> {
+    sqlx::query_as!(
+        User,
+        r#"
+        SELECT * FROM users WHERE email = $1
+"#,
         email
     )
     .fetch_one(&db)
