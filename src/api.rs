@@ -62,6 +62,7 @@ pub struct PostChirpPayload {
 // Maybe "fundamental" types (i.e. those that are determined by the business requirements) and all that they depend on should go in a separate module.
 #[derive(Serialize, Deserialize, Debug, Clone, sqlx::Type)]
 pub struct Chirp {
+    #[serde(rename = "id")]
     pub chirp_id: Uuid,
     pub user_id: Uuid,
     pub created_at: Option<PrimitiveDateTime>,
