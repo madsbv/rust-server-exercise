@@ -1,19 +1,44 @@
 use std::ops::Deref;
 
-use axum::{extract::Path, http::StatusCode, response::IntoResponse, Extension, Json};
+use axum::{
+    extract::Path,
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    response::IntoResponse,
+    Extension, Json,
+};
+use color_eyre::eyre::{OptionExt, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode, PgPool};
-use time::PrimitiveDateTime;
+use time::{Duration, PrimitiveDateTime};
 use uuid::Uuid;
 
-use crate::queries::{
-    self, get_all_chirps_ascending_by_creation, get_user_by_email, insert_chirp, insert_user,
+use crate::{
+    jwt::JwtKey,
+    queries::{
+        self, get_all_chirps_ascending_by_creation, get_user_by_email, insert_chirp, insert_user,
+        User,
+    },
 };
+
+#[derive(Deserialize)]
+pub struct PostChirpPayload {
+    body: String,
+}
 
 pub async fn post_chirp(
     Extension(db): Extension<PgPool>,
+    Extension(key): Extension<JwtKey>,
+    headers: HeaderMap,
     Json(chirp_payload): Json<PostChirpPayload>,
 ) -> impl IntoResponse {
+    let Ok(token) = extract_bearer_token(&headers) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    let Ok(user_id) = key.decode_user(token) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
     let Ok(body) = ChirpBody::try_from(chirp_payload.body) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -24,10 +49,21 @@ pub async fn post_chirp(
             .into_response();
     };
 
-    match insert_chirp(db, body, chirp_payload.user_id).await {
+    match insert_chirp(db, body, user_id).await {
         Ok(chirp) => (StatusCode::CREATED, Json(chirp)).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+fn extract_bearer_token(headers: &HeaderMap) -> Result<&str> {
+    let bearer = headers
+        .get(AUTHORIZATION)
+        .ok_or_eyre("Headers missing valid AUTHORIZATION header")?
+        .to_str()?;
+
+    bearer
+        .strip_prefix("Bearer ")
+        .ok_or_eyre("AUTHORIZATION header is malformed")
 }
 
 pub async fn get_all_chirps(Extension(db): Extension<PgPool>) -> impl IntoResponse {
@@ -50,12 +86,6 @@ pub async fn get_chirp(
 #[derive(Serialize)]
 pub struct ChirpValidationError {
     error: String,
-}
-
-#[derive(Deserialize)]
-pub struct PostChirpPayload {
-    body: String,
-    user_id: Uuid,
 }
 
 // TODO: Figure out how to organize data structures. `Chirp` should probably go in the same place as `User`, but should `ChirpBody` then also go there? There's some strange cross-dependencies going on here.
@@ -138,14 +168,14 @@ fn is_word_bad(w: &str) -> bool {
 }
 
 #[derive(Deserialize)]
-pub struct UserAuthPayload {
+pub struct CreateUserPayload {
     email: String,
     password: String,
 }
 
 pub async fn create_user(
     Extension(db): Extension<PgPool>,
-    Json(payload): Json<UserAuthPayload>,
+    Json(payload): Json<CreateUserPayload>,
 ) -> impl IntoResponse {
     let res = insert_user(db, &payload.email, &payload.password).await;
     match res {
@@ -154,16 +184,42 @@ pub async fn create_user(
     }
 }
 
+#[derive(Deserialize)]
+pub struct LoginPayload {
+    email: String,
+    password: String,
+    expires_in_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct UserWithToken {
+    #[serde(flatten)]
+    user: User,
+    token: String,
+}
+
 pub async fn login(
     Extension(db): Extension<PgPool>,
-    Json(payload): Json<UserAuthPayload>,
+    Extension(key): Extension<JwtKey>,
+    Json(payload): Json<LoginPayload>,
 ) -> impl IntoResponse {
     let user = get_user_by_email(db, &payload.email).await;
+
+    let error_response = (StatusCode::UNAUTHORIZED, "Incorrect email or password").into_response();
+
     if let Ok(user) = user
         && user.verify(&payload.password).is_ok()
     {
-        return (StatusCode::OK, Json(user)).into_response();
+        let expires_in = match payload.expires_in_seconds {
+            Some(n) => Duration::seconds(n).max(Duration::hours(1)),
+            None => Duration::hours(1),
+        };
+
+        let Ok(token) = key.encode_user(&user, expires_in) else {
+            return error_response;
+        };
+        return (StatusCode::OK, Json(UserWithToken { user, token })).into_response();
     }
 
-    (StatusCode::UNAUTHORIZED, "Incorrect email or password").into_response()
+    error_response
 }

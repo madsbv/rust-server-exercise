@@ -13,6 +13,7 @@ use tower_http::services::ServeDir;
 
 mod admin;
 mod api;
+mod jwt;
 mod list_dir;
 mod middlewarez;
 mod queries;
@@ -21,6 +22,7 @@ mod state;
 use self::{
     admin::{metrics, reset},
     api::create_user,
+    jwt::JwtKey,
     list_dir::{servedir_fallback, static_fallback},
     middlewarez::fileserver_hits_middleware,
     state::{AppState, Platform},
@@ -41,6 +43,9 @@ async fn main() {
             .unwrap_or("prod".to_string())
             .as_str(),
     );
+
+    let jwt_secret = dotenvy::var("JWT_SECRET").expect("A key must be provided for creating and validating jwt tokens for authentication of users.");
+    let jwt_key = JwtKey::from(jwt_secret);
 
     let mut app_state = AppState::new();
     app_state.config.platform = platform;
@@ -74,7 +79,8 @@ async fn main() {
         .nest("/admin", admin_router)
         .fallback(static_fallback)
         .with_state(app_state)
-        .layer(Extension(db));
+        .layer(Extension(db))
+        .layer(Extension(jwt_key));
 
     // run our app with hyper, listening globally on port 8080
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
