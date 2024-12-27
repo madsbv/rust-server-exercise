@@ -1,10 +1,10 @@
+use std::random;
+
 use color_eyre::Result;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 use uuid::Uuid;
-
-use crate::queries::User;
 
 #[derive(Clone)]
 pub struct JwtKey {
@@ -37,10 +37,9 @@ impl From<String> for JwtKey {
 impl JwtKey {
     pub fn encode_user(
         &self,
-        user: &User,
-        mut expires_in: Duration,
+        user_id: &Uuid,
+        expires_in: Duration,
     ) -> Result<String, jsonwebtoken::errors::Error> {
-        expires_in = expires_in.max(Duration::hours(1));
         let current_time = time::OffsetDateTime::now_utc();
         let exp = current_time + expires_in - time::OffsetDateTime::UNIX_EPOCH;
         let exp = exp.whole_seconds().try_into().expect("Time moves forward");
@@ -52,7 +51,7 @@ impl JwtKey {
             exp,
             iss: "Chirpy".to_string(),
             iat,
-            sub: user.id.to_string(),
+            sub: user_id.to_string(),
         };
         encode(&Header::default(), &claims, &self.encoding_key)
     }
@@ -68,4 +67,9 @@ impl JwtKey {
         let token_data = self.decode(token)?;
         Ok(Uuid::try_parse(&token_data.claims.sub)?)
     }
+}
+
+pub async fn make_refresh_token() -> String {
+    let bits: (u128, u128) = (random::random(), random::random());
+    format!("{:x}{:x}", bits.0, bits.1)
 }

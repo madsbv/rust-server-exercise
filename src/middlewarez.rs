@@ -15,15 +15,11 @@ pub async fn fileserver_hits_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    println!("Fileserver hits middleware");
-    println!("{request:?}");
-
     let resp = next.run(request).await;
     // tower_http::ServeDir redirects paths to directories without trailing slash to the version with trailing slash with a 307 temporary redirect. This causes double counting of hits in those situations.
     if resp.status() != StatusCode::TEMPORARY_REDIRECT {
         let mut data_mux = app_state.data.lock().unwrap();
         data_mux.fileserver_hits += 1;
     }
-    println!("{resp:?}");
     resp
 }

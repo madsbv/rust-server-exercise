@@ -9,14 +9,14 @@ use axum::{
 use color_eyre::eyre::{OptionExt, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode, PgPool};
-use time::{Duration, PrimitiveDateTime};
+use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::{
-    jwt::JwtKey,
+    auth::JwtKey,
     queries::{
-        self, get_all_chirps_ascending_by_creation, get_user_by_email, insert_chirp, insert_user,
-        User,
+        self, get_all_chirps_ascending_by_creation, get_refresh_token_entry, get_user_by_email,
+        insert_chirp, insert_user, new_refresh_token, revoke_refresh_token, User,
     },
 };
 
@@ -95,8 +95,8 @@ pub struct Chirp {
     #[serde(rename = "id")]
     pub chirp_id: Uuid,
     pub user_id: Uuid,
-    pub created_at: Option<PrimitiveDateTime>,
-    pub updated_at: Option<PrimitiveDateTime>,
+    pub created_at: Option<OffsetDateTime>,
+    pub updated_at: Option<OffsetDateTime>,
     pub body: ChirpBody,
 }
 
@@ -177,7 +177,7 @@ pub async fn create_user(
     Extension(db): Extension<PgPool>,
     Json(payload): Json<CreateUserPayload>,
 ) -> impl IntoResponse {
-    let res = insert_user(db, &payload.email, &payload.password).await;
+    let res = insert_user(&db, &payload.email, &payload.password).await;
     match res {
         Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),
@@ -188,14 +188,15 @@ pub async fn create_user(
 pub struct LoginPayload {
     email: String,
     password: String,
-    expires_in_seconds: Option<i64>,
 }
 
 #[derive(Serialize)]
-pub struct UserWithToken {
+pub struct LoginResponse {
     #[serde(flatten)]
     user: User,
-    token: String,
+    #[serde(rename = "token")]
+    jwt_token: String,
+    refresh_token: String,
 }
 
 pub async fn login(
@@ -203,23 +204,82 @@ pub async fn login(
     Extension(key): Extension<JwtKey>,
     Json(payload): Json<LoginPayload>,
 ) -> impl IntoResponse {
-    let user = get_user_by_email(db, &payload.email).await;
+    let user = get_user_by_email(&db, &payload.email).await;
+    let expires_in = Duration::hours(1);
 
     let error_response = (StatusCode::UNAUTHORIZED, "Incorrect email or password").into_response();
 
     if let Ok(user) = user
         && user.verify(&payload.password).is_ok()
     {
-        let expires_in = match payload.expires_in_seconds {
-            Some(n) => Duration::seconds(n).max(Duration::hours(1)),
-            None => Duration::hours(1),
-        };
-
-        let Ok(token) = key.encode_user(&user, expires_in) else {
+        let (Ok(refresh_token_entry), Ok(jwt_token)) = (
+            new_refresh_token(&db, &user).await,
+            key.encode_user(&user.id, expires_in),
+        ) else {
             return error_response;
         };
-        return (StatusCode::OK, Json(UserWithToken { user, token })).into_response();
+
+        assert_eq!(user.id, refresh_token_entry.user_id);
+
+        return (
+            StatusCode::OK,
+            Json(LoginResponse {
+                user,
+                jwt_token,
+                refresh_token: refresh_token_entry.token,
+            }),
+        )
+            .into_response();
     }
 
     error_response
+}
+
+#[derive(Serialize)]
+pub struct RefreshResponse {
+    #[serde(rename = "token")]
+    pub jwt_token: String,
+}
+
+pub async fn refresh(
+    Extension(db): Extension<PgPool>,
+    Extension(key): Extension<JwtKey>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let Ok(token) = extract_bearer_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    let Ok(token_entry) = get_refresh_token_entry(&db, token).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    if token_entry.expires_at < OffsetDateTime::now_utc() {
+        // refresh token expired
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    if let Some(revoked_at) = token_entry.revoked_at
+        && revoked_at < OffsetDateTime::now_utc()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let Ok(jwt_token) = key.encode_user(&token_entry.user_id, Duration::hours(1)) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+
+    Json(RefreshResponse { jwt_token }).into_response()
+}
+
+pub async fn revoke(Extension(db): Extension<PgPool>, headers: HeaderMap) -> impl IntoResponse {
+    let Ok(token) = extract_bearer_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    if revoke_refresh_token(&db, token).await.is_err() {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    StatusCode::NO_CONTENT.into_response()
 }

@@ -1,6 +1,7 @@
 #![feature(let_chains)]
+#![feature(random)]
 
-use api::{get_all_chirps, get_chirp, login, post_chirp};
+use api::{get_all_chirps, get_chirp, login, post_chirp, refresh, revoke};
 use axum::{
     handler::HandlerWithoutStateExt,
     middleware::{self},
@@ -13,7 +14,7 @@ use tower_http::services::ServeDir;
 
 mod admin;
 mod api;
-mod jwt;
+mod auth;
 mod list_dir;
 mod middlewarez;
 mod queries;
@@ -22,7 +23,7 @@ mod state;
 use self::{
     admin::{metrics, reset},
     api::create_user,
-    jwt::JwtKey,
+    auth::JwtKey,
     list_dir::{servedir_fallback, static_fallback},
     middlewarez::fileserver_hits_middleware,
     state::{AppState, Platform},
@@ -71,7 +72,9 @@ async fn main() {
         .route("/chirps", get(get_all_chirps))
         .route("/chirps/:chirp_id", get(get_chirp))
         .route("/users", post(create_user))
-        .route("/login", post(login));
+        .route("/login", post(login))
+        .route("/refresh", post(refresh))
+        .route("/revoke", post(revoke));
 
     let main_router = Router::new()
         .merge(app_router)

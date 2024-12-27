@@ -1,19 +1,20 @@
 use password_auth::{generate_hash, verify_password};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use time::PrimitiveDateTime;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
     api::{Chirp, ChirpBody},
+    auth::make_refresh_token,
     state::Platform,
 };
 
 #[derive(Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
-    pub created_at: Option<PrimitiveDateTime>,
-    pub updated_at: Option<PrimitiveDateTime>,
+    pub created_at: Option<OffsetDateTime>,
+    pub updated_at: Option<OffsetDateTime>,
     pub email: String,
     #[serde(skip_serializing)]
     hashed_password: String,
@@ -25,7 +26,7 @@ impl User {
     }
 }
 
-pub async fn insert_user(db: PgPool, email: &str, password: &str) -> Result<User, sqlx::Error> {
+pub async fn insert_user(db: &PgPool, email: &str, password: &str) -> Result<User, sqlx::Error> {
     let hashed_password = generate_hash(password);
     sqlx::query_as!(
         User,
@@ -43,11 +44,11 @@ pub async fn insert_user(db: PgPool, email: &str, password: &str) -> Result<User
         email,
         hashed_password
     )
-    .fetch_one(&db)
+    .fetch_one(db)
     .await
 }
 
-pub async fn get_user_by_email(db: PgPool, email: &str) -> Result<User, sqlx::Error> {
+pub async fn get_user_by_email(db: &PgPool, email: &str) -> Result<User, sqlx::Error> {
     sqlx::query_as!(
         User,
         r#"
@@ -55,7 +56,7 @@ pub async fn get_user_by_email(db: PgPool, email: &str) -> Result<User, sqlx::Er
 "#,
         email
     )
-    .fetch_one(&db)
+    .fetch_one(db)
     .await
 }
 
@@ -122,4 +123,68 @@ pub async fn delete_all_users(db: PgPool, platform: Platform) -> Result<u64, sql
     .execute(&db)
     .await
     .map(|ok| ok.rows_affected())
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct RefreshTokenEntry {
+    pub token: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub user_id: Uuid,
+    pub expires_at: OffsetDateTime,
+    pub revoked_at: Option<OffsetDateTime>,
+}
+
+pub async fn new_refresh_token(db: &PgPool, user: &User) -> Result<RefreshTokenEntry, sqlx::Error> {
+    let refresh_token = make_refresh_token().await;
+    sqlx::query_as!(
+        RefreshTokenEntry,
+        r#"
+INSERT INTO refresh_tokens(token, created_at, updated_at, user_id, expires_at, revoked_at)
+VALUES (
+$1,
+NOW(),
+NOW(),
+$2,
+NOW() + INTERVAL '60 days',
+NULL
+) RETURNING *
+"#,
+        refresh_token,
+        user.id
+    )
+    .fetch_one(db)
+    .await
+}
+
+pub async fn get_refresh_token_entry(
+    db: &PgPool,
+    token: &str,
+) -> Result<RefreshTokenEntry, sqlx::Error> {
+    sqlx::query_as!(
+        RefreshTokenEntry,
+        r#"
+SELECT * FROM refresh_tokens WHERE token = $1
+"#,
+        token
+    )
+    .fetch_one(db)
+    .await
+}
+
+pub async fn revoke_refresh_token(
+    db: &PgPool,
+    token: &str,
+) -> Result<RefreshTokenEntry, sqlx::Error> {
+    sqlx::query_as!(
+        RefreshTokenEntry,
+        r#"UPDATE refresh_tokens
+SET updated_at = NOW(), revoked_at = NOW()
+WHERE token = $1
+RETURNING *"#,
+        token
+    )
+    .fetch_one(db)
+    .await
 }
