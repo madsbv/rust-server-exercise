@@ -1,7 +1,7 @@
-use std::ops::Deref;
+use std::{collections::HashMap, ops::Deref};
 
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::IntoResponse,
     Extension, Json,
@@ -15,9 +15,10 @@ use uuid::Uuid;
 use crate::{
     auth::{JwtKey, PolkaAPIKey},
     queries::{
-        self, delete_chirp_if_author, get_all_chirps_ascending_by_creation,
-        get_refresh_token_entry, get_user_by_email, insert_chirp, insert_user, make_user_red,
-        new_refresh_token, revoke_refresh_token, update_user_credentials, RefreshTokenEntry, User,
+        self, delete_chirp_if_author, get_all_chirps_by_author_sorted_by_creation,
+        get_all_chirps_sorted_by_creation, get_refresh_token_entry, get_user_by_email,
+        insert_chirp, insert_user, make_user_red, new_refresh_token, revoke_refresh_token,
+        update_user_credentials, RefreshTokenEntry, SortOrder, User,
     },
 };
 
@@ -80,8 +81,25 @@ pub fn extract_api_key(headers: &HeaderMap) -> Result<&str> {
         .ok_or_eyre("AUTHORIZATION header is malformed")
 }
 
-pub async fn get_all_chirps(Extension(db): Extension<PgPool>) -> impl IntoResponse {
-    match get_all_chirps_ascending_by_creation(db).await {
+pub async fn get_all_chirps(
+    Extension(db): Extension<PgPool>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let sort_order = match params.get("sort").unwrap_or(&"asc".to_string()).as_str() {
+        "asc" => SortOrder::Asc,
+        "desc" => SortOrder::Desc,
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    let chirps = match params.get("author_id").map(|s| Uuid::try_parse(s)) {
+        Some(Ok(author_id)) => {
+            get_all_chirps_by_author_sorted_by_creation(&db, author_id, sort_order).await
+        }
+        None => get_all_chirps_sorted_by_creation(&db, sort_order).await,
+        Some(Err(_)) => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    match chirps {
         Ok(chirps) => Json(chirps).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -118,9 +136,7 @@ pub struct ChirpValidationError {
     error: String,
 }
 
-// TODO: Figure out how to organize data structures. `Chirp` should probably go in the same place as `User`, but should `ChirpBody` then also go there? There's some strange cross-dependencies going on here.
-// Maybe "fundamental" types (i.e. those that are determined by the business requirements) and all that they depend on should go in a separate module.
-#[derive(Serialize, Deserialize, Debug, Clone, sqlx::Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::Type, sqlx::FromRow)]
 pub struct Chirp {
     #[serde(rename = "id")]
     pub chirp_id: Uuid,

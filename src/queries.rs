@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use password_auth::{generate_hash, verify_password};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -124,16 +126,56 @@ pub async fn insert_chirp(
     .await
 }
 
-pub async fn get_all_chirps_ascending_by_creation(db: PgPool) -> Result<Vec<Chirp>, sqlx::Error> {
-    sqlx::query_as!(
-        Chirp,
-        r#"
-SELECT chirp_id, user_id, created_at, updated_at, body as "body: _" FROM chirps
-ORDER BY created_at ASC
-"#
-    )
-    .fetch_all(&db)
-    .await
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+impl Display for SortOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                SortOrder::Asc => "ASC",
+                SortOrder::Desc => "DESC",
+            }
+        )
+    }
+}
+
+pub async fn get_all_chirps_sorted_by_creation(
+    db: &PgPool,
+    sort_order: SortOrder,
+) -> Result<Vec<Chirp>, sqlx::Error> {
+    // The compile time checked `query_as!` macro does not accept dynamically determined sort order.
+    // Since the only user-provided input goes through SortOrder::fmt, which takes predetermined values, this is still safe.
+    let raw_sql = format!(
+        "
+SELECT * FROM chirps
+ORDER BY created_at {sort_order}
+"
+    );
+
+    sqlx::query_as(&raw_sql).fetch_all(db).await
+}
+
+pub async fn get_all_chirps_by_author_sorted_by_creation(
+    db: &PgPool,
+    author_id: Uuid,
+    sort_order: SortOrder,
+) -> Result<Vec<Chirp>, sqlx::Error> {
+    // The compile time checked `query_as!` macro does not accept dynamically determined sort order.
+    // Since the only user-provided inputs go through Uuid::to_string SortOrder::to_string, which only take safe values, this is still safe.
+    let raw_sql = format!(
+        "
+SELECT * FROM chirps
+WHERE user_id = {author_id}
+ORDER BY created_at {sort_order}
+"
+    );
+
+    sqlx::query_as(&raw_sql).fetch_all(db).await
 }
 
 pub async fn get_chirp(db: PgPool, chirp_id: Uuid) -> Result<Chirp, sqlx::Error> {
