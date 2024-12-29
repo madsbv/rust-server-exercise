@@ -12,13 +12,12 @@ use sqlx::{Database, Decode, PgPool};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::queries::{delete_chirp_if_author, new_refresh_token};
 use crate::{
-    auth::JwtKey,
+    auth::{JwtKey, PolkaAPIKey},
     queries::{
-        self, get_all_chirps_ascending_by_creation, get_refresh_token_entry, get_user_by_email,
-        insert_chirp, insert_user, revoke_refresh_token, update_user_credentials,
-        RefreshTokenEntry, User,
+        self, delete_chirp_if_author, get_all_chirps_ascending_by_creation,
+        get_refresh_token_entry, get_user_by_email, insert_chirp, insert_user, make_user_red,
+        new_refresh_token, revoke_refresh_token, update_user_credentials, RefreshTokenEntry, User,
     },
 };
 
@@ -67,6 +66,17 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<&str> {
 
     bearer
         .strip_prefix("Bearer ")
+        .ok_or_eyre("AUTHORIZATION header is malformed")
+}
+
+pub fn extract_api_key(headers: &HeaderMap) -> Result<&str> {
+    let auth_str = headers
+        .get(AUTHORIZATION)
+        .ok_or_eyre("Headers missing valid AUTHORIZATION header")?
+        .to_str()?;
+
+    auth_str
+        .strip_prefix("ApiKey ")
         .ok_or_eyre("AUTHORIZATION header is malformed")
 }
 
@@ -334,4 +344,36 @@ pub async fn update_user(
         Ok(user) => (StatusCode::OK, Json(user)).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+#[derive(Deserialize)]
+pub struct PolkaData {
+    pub user_id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct PolkaReq {
+    pub event: String,
+    pub data: PolkaData,
+}
+
+pub async fn polka_webhook(
+    Extension(db): Extension<PgPool>,
+    Extension(polka_api_key): Extension<PolkaAPIKey>,
+    headers: HeaderMap,
+    Json(req): Json<PolkaReq>,
+) -> impl IntoResponse {
+    if !polka_api_key.request_authorized(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    if req.event != "user.upgraded" {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
+    match make_user_red(&db, req.data.user_id).await {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::NOT_FOUND,
+    }
+    .into_response()
 }

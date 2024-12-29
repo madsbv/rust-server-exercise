@@ -18,6 +18,7 @@ pub struct User {
     pub email: String,
     #[serde(skip_serializing)]
     hashed_password: String,
+    pub is_chirpy_red: bool,
 }
 
 impl User {
@@ -77,6 +78,21 @@ RETURNING *
 "#,
         email,
         hashed_password,
+        user_id
+    )
+    .fetch_one(db)
+    .await
+}
+
+pub async fn make_user_red(db: &PgPool, user_id: Uuid) -> Result<User, sqlx::Error> {
+    sqlx::query_as!(
+        User,
+        r#"
+UPDATE users
+SET is_chirpy_red = true
+WHERE id = $1
+RETURNING *
+"#,
         user_id
     )
     .fetch_one(db)

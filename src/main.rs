@@ -2,8 +2,10 @@
 #![feature(random)]
 
 use api::{
-    delete_chirp, get_all_chirps, get_chirp, login, post_chirp, refresh, revoke, update_user,
+    delete_chirp, get_all_chirps, get_chirp, login, polka_webhook, post_chirp, refresh, revoke,
+    update_user,
 };
+use auth::PolkaAPIKey;
 use axum::{
     handler::HandlerWithoutStateExt,
     middleware::{self},
@@ -50,6 +52,11 @@ async fn main() {
     let jwt_secret = dotenvy::var("JWT_SECRET").expect("A key must be provided for creating and validating jwt tokens for authentication of users.");
     let jwt_key = JwtKey::from(jwt_secret);
 
+    let raw_polka_api_key = dotenvy::var("POLKA_KEY").expect("A Polka API key must be provided");
+    let polka_key = PolkaAPIKey {
+        key: raw_polka_api_key,
+    };
+
     let mut app_state = AppState::new();
     app_state.config.platform = platform;
 
@@ -78,7 +85,8 @@ async fn main() {
         .route("/users", put(update_user))
         .route("/login", post(login))
         .route("/refresh", post(refresh))
-        .route("/revoke", post(revoke));
+        .route("/revoke", post(revoke))
+        .route("/polka/webhooks", post(polka_webhook));
 
     let main_router = Router::new()
         .merge(app_router)
@@ -87,7 +95,8 @@ async fn main() {
         .fallback(static_fallback)
         .with_state(app_state)
         .layer(Extension(db))
-        .layer(Extension(jwt_key));
+        .layer(Extension(jwt_key))
+        .layer(Extension(polka_key));
 
     // run our app with hyper, listening globally on port 8080
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();

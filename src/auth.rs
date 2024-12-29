@@ -1,10 +1,13 @@
 use std::random;
 
+use axum::http::HeaderMap;
 use color_eyre::Result;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 use uuid::Uuid;
+
+use crate::api::extract_api_key;
 
 #[derive(Clone)]
 pub struct JwtKey {
@@ -19,6 +22,17 @@ pub struct JwtClaims {
     iss: String,
     iat: u64,
     sub: String,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct PolkaAPIKey {
+    pub key: String,
+}
+
+impl PolkaAPIKey {
+    pub fn request_authorized(&self, headers: &HeaderMap) -> bool {
+        extract_api_key(headers).is_ok_and(|key| key == self.key)
+    }
 }
 
 impl From<String> for JwtKey {
