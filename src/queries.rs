@@ -60,6 +60,29 @@ pub async fn get_user_by_email(db: &PgPool, email: &str) -> Result<User, sqlx::E
     .await
 }
 
+pub async fn update_user_credentials(
+    db: &PgPool,
+    user_id: Uuid,
+    email: &str,
+    password: &str,
+) -> Result<User, sqlx::Error> {
+    let hashed_password = generate_hash(password);
+    sqlx::query_as!(
+        User,
+        r#"
+UPDATE users
+SET email = $1, hashed_password = $2
+WHERE id = $3
+RETURNING *
+"#,
+        email,
+        hashed_password,
+        user_id
+    )
+    .fetch_one(db)
+    .await
+}
+
 pub async fn insert_chirp(
     db: PgPool,
     body: ChirpBody,

@@ -6,17 +6,19 @@ use axum::{
     response::IntoResponse,
     Extension, Json,
 };
-use color_eyre::eyre::{OptionExt, Result};
+use color_eyre::eyre::{ensure, OptionExt, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode, PgPool};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
+use crate::queries::new_refresh_token;
 use crate::{
     auth::JwtKey,
     queries::{
         self, get_all_chirps_ascending_by_creation, get_refresh_token_entry, get_user_by_email,
-        insert_chirp, insert_user, new_refresh_token, revoke_refresh_token, User,
+        insert_chirp, insert_user, revoke_refresh_token, update_user_credentials,
+        RefreshTokenEntry, User,
     },
 };
 
@@ -246,30 +248,39 @@ pub async fn refresh(
     Extension(key): Extension<JwtKey>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let Ok(token) = extract_bearer_token(&headers) else {
+    let Ok(token) = authorize_user_refresh_token(&db, &headers).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
-    let Ok(token_entry) = get_refresh_token_entry(&db, token).await else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-
-    if token_entry.expires_at < OffsetDateTime::now_utc() {
-        // refresh token expired
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-
-    if let Some(revoked_at) = token_entry.revoked_at
-        && revoked_at < OffsetDateTime::now_utc()
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-
-    let Ok(jwt_token) = key.encode_user(&token_entry.user_id, Duration::hours(1)) else {
+    let Ok(jwt_token) = key.encode_user(&token.user_id, Duration::hours(1)) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
 
     Json(RefreshResponse { jwt_token }).into_response()
+}
+
+async fn authorize_user_refresh_token(
+    db: &PgPool,
+    headers: &HeaderMap,
+) -> Result<RefreshTokenEntry> {
+    let token = extract_bearer_token(headers)?;
+
+    let token_entry = get_refresh_token_entry(db, token).await?;
+
+    let current_time = OffsetDateTime::now_utc();
+
+    ensure!(token_entry.expires_at < current_time, "token has expired");
+
+    if let Some(revoked_at) = token_entry.revoked_at {
+        ensure!(revoked_at < current_time, "token was revoked");
+    }
+
+    Ok(token_entry)
+}
+
+async fn extract_jwt_token_user_id(headers: &HeaderMap, key: &JwtKey) -> Result<Uuid> {
+    let token = extract_bearer_token(headers)?;
+    key.decode_user(token)
 }
 
 pub async fn revoke(Extension(db): Extension<PgPool>, headers: HeaderMap) -> impl IntoResponse {
@@ -282,4 +293,27 @@ pub async fn revoke(Extension(db): Extension<PgPool>, headers: HeaderMap) -> imp
     };
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct PutUserReq {
+    email: String,
+    password: String,
+}
+
+pub async fn update_user(
+    Extension(db): Extension<PgPool>,
+    headers: HeaderMap,
+    Extension(key): Extension<JwtKey>,
+    Json(req_body): Json<PutUserReq>,
+) -> impl IntoResponse {
+    // FIXME: This should be a jwt token instead of refresh token
+    let Ok(user_id) = extract_jwt_token_user_id(&headers, &key).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    match update_user_credentials(&db, user_id, &req_body.email, &req_body.password).await {
+        Ok(user) => (StatusCode::OK, Json(user)).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
