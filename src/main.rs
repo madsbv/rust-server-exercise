@@ -1,11 +1,13 @@
 #![feature(let_chains)]
 #![feature(random)]
 
-use api::{get_all_chirps, get_chirp, login, post_chirp, refresh, revoke, update_user};
+use api::{
+    delete_chirp, get_all_chirps, get_chirp, login, post_chirp, refresh, revoke, update_user,
+};
 use axum::{
     handler::HandlerWithoutStateExt,
     middleware::{self},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Extension, Router,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -71,6 +73,7 @@ async fn main() {
         .route("/chirps", post(post_chirp))
         .route("/chirps", get(get_all_chirps))
         .route("/chirps/:chirp_id", get(get_chirp))
+        .route("/chirps/:chirp_id", delete(delete_chirp))
         .route("/users", post(create_user))
         .route("/users", put(update_user))
         .route("/login", post(login))

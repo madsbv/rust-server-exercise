@@ -132,7 +132,24 @@ WHERE chirp_id = $1
     .fetch_one(&db)
     .await
 }
-
+pub async fn delete_chirp_if_author(
+    db: &PgPool,
+    chirp_id: &Uuid,
+    user_id: &Uuid,
+) -> Result<Chirp, sqlx::Error> {
+    sqlx::query_as!(
+        Chirp,
+        r#"
+DELETE FROM chirps
+WHERE chirp_id = $1 AND user_id = $2
+RETURNING chirp_id, user_id, created_at, updated_at, body as "body: _"
+"#,
+        chirp_id,
+        user_id
+    )
+    .fetch_one(db)
+    .await
+}
 /// Take `platform` as input to safeguard against accidental deletion.
 /// WARNING: The caller should never call this function with anything other than Platform::Dev, but because of how dangerous this endpoint is, we add an additional safeguard here.
 /// Returns the number of deleted rows as result if successful.

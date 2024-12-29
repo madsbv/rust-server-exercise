@@ -12,7 +12,7 @@ use sqlx::{Database, Decode, PgPool};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::queries::new_refresh_token;
+use crate::queries::{delete_chirp_if_author, new_refresh_token};
 use crate::{
     auth::JwtKey,
     queries::{
@@ -33,11 +33,7 @@ pub async fn post_chirp(
     headers: HeaderMap,
     Json(chirp_payload): Json<PostChirpPayload>,
 ) -> impl IntoResponse {
-    let Ok(token) = extract_bearer_token(&headers) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-
-    let Ok(user_id) = key.decode_user(token) else {
+    let Ok(user_id) = extract_user_id_from_bearer(&headers, &key) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
@@ -55,6 +51,12 @@ pub async fn post_chirp(
         Ok(chirp) => (StatusCode::CREATED, Json(chirp)).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+fn extract_user_id_from_bearer(headers: &HeaderMap, key: &JwtKey) -> Result<Uuid> {
+    let token = extract_bearer_token(headers)?;
+
+    key.decode_user(token)
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Result<&str> {
@@ -82,6 +84,22 @@ pub async fn get_chirp(
     match queries::get_chirp(db, chirp_id).await {
         Ok(chirp) => Json(chirp).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+pub async fn delete_chirp(
+    Extension(db): Extension<PgPool>,
+    Path(chirp_id): Path<Uuid>,
+    headers: HeaderMap,
+    Extension(key): Extension<JwtKey>,
+) -> impl IntoResponse {
+    let Ok(user_id) = extract_user_id_from_bearer(&headers, &key) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    match delete_chirp_if_author(&db, &chirp_id, &user_id).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::FORBIDDEN.into_response(),
     }
 }
 
